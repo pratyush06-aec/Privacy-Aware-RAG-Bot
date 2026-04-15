@@ -2,20 +2,28 @@ import os
 from flask import Flask, redirect, url_for, session
 from authlib.integrations.flask_client import OAuth
 from dotenv import load_dotenv
-from openfga_sdk import OpenFgaClient
+import requests
 
-load_dotenv()
+env_path = os.path.join(os.path.dirname(__file__), '.env')
+load_dotenv(dotenv_path=env_path)
+
+print("AUTH0_DOMAIN =", os.getenv("AUTH0_DOMAIN")) 
 
 app = Flask(__name__)
 app.secret_key = os.getenv("APP_SECRET_KEY")
 
-fga_client = OpenFgaClient(
-    api_url=os.getenv("FGA_API_URL"),
-    store_id=os.getenv("FGA_STORE_ID"),
-    authorization_model_id=os.getenv("FGA_MODEL_ID"),
-    client_id=os.getenv("FGA_CLIENT_ID"),
-    client_secret=os.getenv("FGA_CLIENT_SECRET")
-)
+def get_fga_token():
+    url = f"https://{os.getenv('AUTH0_DOMAIN')}/oauth/token"
+
+    payload = {
+        "grant_type": "client_credentials",
+        "client_id": os.getenv("FGA_CLIENT_ID"),
+        "client_secret": os.getenv("FGA_CLIENT_SECRET"),
+        "audience": "https://api.fga.dev/"
+    }
+
+    response = requests.post(url, json=payload)
+    return response.json()["access_token"]
 
 oauth = OAuth(app)
 
@@ -64,12 +72,27 @@ documents = [
 
 def check_access(user, document):
     try:
-        response = fga_client.check(
-            user=f"user:{user}",
-            relation="viewer",
-            object=f"document:{document}"
-        )
-        return response["allowed"]
+        token = get_fga_token()
+
+        url = f"{os.getenv('FGA_API_URL')}/stores/{os.getenv('FGA_STORE_ID')}/check"
+
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json"
+        }
+
+        payload = {
+            "tuple_key": {
+                "user": f"user:{user}",
+                "relation": "viewer",
+                "object": f"document:{document}"
+            },
+            "authorization_model_id": os.getenv("FGA_MODEL_ID")
+        }
+
+        response = requests.post(url, json=payload, headers=headers)
+        return response.json().get("allowed", False)
+
     except Exception as e:
         print("FGA Error:", e)
         return False
@@ -87,12 +110,17 @@ def rag_query(user, query):
     allowed_docs = get_allowed_docs(user)
 
     if not allowed_docs:
-        return "❌ No access to any documents."
+        return "❌ You do not have access to any relevant documents."
 
     context = " ".join([doc["text"] for doc in allowed_docs])
 
-    # Simple mock LLM
-    return f"Answer based on accessible data:\n{context}"
+    return f"""
+🔐 Access-Controlled Response:
+
+Based only on documents you are allowed to access:
+
+{context}
+"""
     
 # Home route
 @app.route("/")
@@ -113,6 +141,16 @@ def callback():
     token = auth0.authorize_access_token()
     session["user"] = token["userinfo"]
     return redirect("/")
+
+@app.route("/chat")
+def chat():
+    return """
+    <h2>Privacy-Aware RAG Bot</h2>
+    <form method="post" action="/query">
+        <input name="query" placeholder="Ask something..." />
+        <button type="submit">Ask</button>
+    </form>
+    """
 
 # Logout route
 @app.route("/logout")
