@@ -1,5 +1,5 @@
 import os
-from flask import Flask, redirect, url_for, session
+from flask import Flask, redirect, url_for, session, request
 from authlib.integrations.flask_client import OAuth
 from dotenv import load_dotenv
 import requests
@@ -142,7 +142,7 @@ def callback():
     session["user"] = token["userinfo"]
     return redirect("/")
 
-@app.route("/chat")
+@app.route("/chat", methods=["GET"])
 def chat():
     return """
     <h2>Privacy-Aware RAG Bot</h2>
@@ -151,6 +151,19 @@ def chat():
         <button type="submit">Ask</button>
     </form>
     """
+
+@app.route("/query", methods=["POST"])
+def query():
+    if not session.get("user"):
+        return "Unauthorized", 401
+
+    user_email = session["user"]["email"]
+
+    user_query = request.form.get("query")
+
+    result = rag_query(user_email, user_query)
+
+    return result
 
 # Logout route
 @app.route("/logout")
